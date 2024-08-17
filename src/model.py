@@ -151,7 +151,7 @@ class DecoderBlock(nn.Module):
         self.cross_attention = cross_attention
         self.dropout = dropout
         self.norm = LayerNormalization()
-        self.residual_connections = [ ResidualConnection(dropout) for _ in range(3) ]
+        self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(3)])
 
     def forward(self, x, encoder_output, src_mask, tgt_mask):
 
@@ -243,11 +243,3 @@ class transformer_builder(nn.Module):
             nn.init.xavier_normal_(parameter)
 
         return transformer
-
-
-
-
-
-
-
-
