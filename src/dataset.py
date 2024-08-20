@@ -2,11 +2,10 @@ import torch
 from torch.utils.data import Dataset
 
 class BiDataset( Dataset ):
-    def __init__(self, src_tokenizer, trg_tokenizer, d_model,
+    def __init__(self, src_tokenizer, trg_tokenizer,
                  ds, seq_len, trg_lang, src_lang):
         super().__init__()
         self.ds = ds
-        self.d_model = d_model
         self.seq_len = seq_len
         self.trg_lang = trg_lang 
         self.src_lang = src_lang

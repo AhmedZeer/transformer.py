@@ -209,7 +209,7 @@ class Transformer(nn.Module):
 class transformer_builder(nn.Module):
     def __init__(self, src_seq_len : int, tgt_seq_len : int, src_vocab_size : int,
                  tgt_vocab_size : int, d_ff = 2048, d_model : int = 512, h : int = 8,
-                 N : int = 6, dropout : float = 0.5):
+                 N : int = 6, dropout : float = 0.1):
 
         src_embedding = EmbeddingInput(d_model, src_vocab_size)
         tgt_embedding = EmbeddingInput(d_model, tgt_vocab_size)
