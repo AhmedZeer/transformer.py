@@ -1,4 +1,4 @@
-import pathlib
+from pathlib import Path
 
 def generate_config():
     return {

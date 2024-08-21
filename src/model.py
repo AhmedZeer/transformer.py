@@ -239,7 +239,7 @@ class transformer_builder(nn.Module):
                     src_embed = src_embedding, tgt_embed = tgt_embedding,
                     pos_encoding = positional_encoder)
 
-        for parameter in transformer.parameters:
+        for parameter in transformer.parameters():
             nn.init.xavier_normal_(parameter)
 
         return transformer

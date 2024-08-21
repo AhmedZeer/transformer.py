@@ -62,11 +62,13 @@ class BiDataset( Dataset ):
         causal_mask = causal_mask_creator(label.shape[0])
 
         return {
-            "encoder_input" : encoded_src,
-            "decoder_input" : encoded_trg,
-            "encoder_padding_mask" : (encoded_src != self.pad).unsqueeze(0).unsqueeze(0).int(),
-            "decoder_padding_mask" : (encoded_trg != self.pad).unsqueeze(0).unsqueeze(0).int() & causal_mask,
-            "label":label,
+            "encoder_input" : encoder_input,
+            "decoder_input" : decoder_input,
+            # (1, 1, seq_len)
+            "encoder_mask" : (encoded_src != self.pad).unsqueeze(0).unsqueeze(0).int(),
+            # (1, seq_len, seq_len)
+            "decoder_mask" : (encoded_trg != self.pad).unsqueeze(0).int() & causal_mask,
+            "label":label, # (seq_len)
             "target_txt":trg_lang_pair,
             "src_txt:":src_lang_pair
         }
