@@ -106,7 +106,10 @@ def train(config):
             label = batch['label'].to(device)                 # B x seq_len
 
             encoder_output = model.encode(encoder_input, encoder_mask)
-            decoder_output = model.decode(encoder_output, decoder_input,
+
+            assert encoder_output != None, "Train: Encoder Output Is None."
+
+            decoder_output = model.decode(decoder_input, encoder_output,
                                           encoder_mask, decoder_mask)
             pred = model.project(decoder_output) # B x seq_len x vocab_size
 
@@ -116,7 +119,7 @@ def train(config):
             label = label.view(-1)
 
             loss = loss_fn(pred, label)
-            batch_iterator.set_postfix({"Loss:":f"{loss.item()}"})
+            batch_iterator.set_postfix({"Loss: ":f"{loss.item()}"})
 
             writer.add_scalar("Loss",loss.item(),global_step)
             writer.flush()

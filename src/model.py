@@ -12,7 +12,7 @@ class EmbeddingInput(nn.Module):
         self.vocab_size = vocab_size
         self.d_model = d_model
     
-    def forward( self, x ):
+    def forward(self, x):
         return self.embeddings(x) * math.sqrt(self.d_model)
 
 
@@ -29,7 +29,7 @@ class PositionalEncoder(nn.Module):
         divide = torch.exp( torch.arange(0, d_model,2) * ( - math.log(10000) / d_model) )
 
         # Applying The Encoder For Each Word But For Different Dims
-        self.pe[:, 1::2] = torch.cos(position * divide) 
+        self.pe[:, 1::2] = torch.cos(position * divide)
         self.pe[:, 0::2] = torch.sin(position * divide)
         self.pe.unsqueeze_(0) # Adding one more dimension for batching.
 
@@ -83,16 +83,14 @@ class MultiHeadAttention(nn.Module):
     def attention(query, key, value, dropout : nn.Dropout, mask):
         d_k = query.shape[-1]
         qk = (query @ key.transpose(-1,-2)) / math.sqrt(d_k) # B x H x Seq x Seq
-        qkv = qk @ value # B x H x Seq x Embed
 
         if dropout is not None:
-            qkv = dropout(qkv)
+            qk = dropout(qk)
 
         if mask is not None:
-            print("qkv : ", qkv.shape)
-            print("mask: ", mask.shape)
-            qkv.masked_fill_(mask == 0, -1e9)
+            qk.masked_fill_(mask == 0, -1e9)
 
+        qkv = qk @ value # B x H x Seq x Embed
         return qk, qkv.softmax(dim=-1)
 
 
@@ -106,10 +104,12 @@ class MultiHeadAttention(nn.Module):
         value = value.view(v.shape[0], v.shape[1], self.h, self.d_k).transpose(1,2)
         query = query.view(q.shape[0], q.shape[1], self.h, self.d_k).transpose(1,2)
 
-        x, self.attention_scores = MultiHeadAttention.attention(query=query, key=key, value=value, dropout=self.dropout, mask=mask)
+        self.attention_scores, x = MultiHeadAttention.attention(query=query, key=key, value=value, dropout=self.dropout, mask=mask)
 
         # B x H x Seq x Embed --> B x Seq X Embed
-        x = x.transpose(1,2).contiguos().view(x.shape[0], -1, self.d_k * self.h )
+        x = x.transpose(1,2).contiguous().view(x.shape[0], -1, self.d_k * self.h )
+
+        assert x != None, "Attention Is None."
         return self.w_o(x)
 
 class ResidualConnection(nn.Module):
@@ -119,6 +119,7 @@ class ResidualConnection(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, sublayer):
+        assert x != None, "Residual Input Is None."
         return x + self.dropout(sublayer(self.norm(x)))
 
 class EncoderBlock(nn.Module):
@@ -132,6 +133,7 @@ class EncoderBlock(nn.Module):
     def forward(self, x, src_mask):
         x = self.residual_connections[0](x, lambda x: self.self_attention_head(x,x,x, src_mask))
         x = self.residual_connections[1](x, self.feed_forward)
+        assert x != None, "Encoder Output Is None."
         return x
 
 class Encoder(nn.Module):
@@ -199,12 +201,12 @@ class Transformer(nn.Module):
     def encode(self, src, src_mask):
         src = self.src_embed(src)
         src = self.pos_encoding(src)
-        self.encoder(src, src_mask)
+        return self.encoder(src, src_mask)
 
     def decode(self, tgt, encoder_output, src_mask, tgt_mask):
         tgt = self.tgt_embed(tgt)
         tgt = self.pos_encoding(tgt)
-        self.decoder(tgt, encoder_output, src_mask, tgt_mask)
+        return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
 
     def project(self, decoder_output):
         return self.projection(decoder_output)
