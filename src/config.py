@@ -5,14 +5,14 @@ def generate_config():
         "lang_src":"en",
         "lang_trg":"tr",
         "tokenizer_path":f"tokenizer_{0}.json",
-        "seq_len":300,
+        "seq_len":2500,
         "batch_size":4,
         "model_folder":"weihgts",
         "model_basename":"tmodel_",
         "preload": None,
         "lr":1e-4,
         "experiment_name":"runs/tmodel",
-        "num_epochs":0
+        "num_epochs":1
     }
 
 def get_weight_file_path(config, epoch):

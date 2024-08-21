@@ -1,3 +1,4 @@
+from numpy._core.defchararray import decode
 import torch
 from torch.utils.data import Dataset
 
@@ -12,9 +13,9 @@ class BiDataset( Dataset ):
         self.src_tokenizer = src_tokenizer
         self.trg_tokenizer = trg_tokenizer
 
-        self.sos = torch.Tensor(src_tokenizer.token_to_id('[SOS]'))
-        self.eos = torch.Tensor(src_tokenizer.token_to_id('[EOS]'))
-        self.pad = torch.Tensor(src_tokenizer.token_to_id('[PAD]'))
+        self.sos = torch.tensor([src_tokenizer.token_to_id('[SOS]')], dtype=torch.int64)
+        self.eos = torch.tensor([src_tokenizer.token_to_id('[EOS]')], dtype=torch.int64)
+        self.pad = torch.tensor([src_tokenizer.token_to_id('[PAD]')], dtype=torch.int64)
 
     def __len__(self):
         return len(self.ds)
@@ -29,50 +30,53 @@ class BiDataset( Dataset ):
 
         src_padding_num = self.seq_len - ( len(encoded_src) + 2 )
         trg_padding_num = self.seq_len - ( len(encoded_trg) + 1 )
-        
-        assert src_padding_num < 0, "Too Short SeqLen"
-        assert trg_padding_num < 0, "Too Short SeqLen"
+
+        assert src_padding_num > 0, f"Too Short SeqLen, seq_len: {self.seq_len}, src_len:{len(encoded_src)}."
+        assert trg_padding_num > 0, f"Too Short SeqLen, seq_len: {self.seq_len}, src_len:{len(encoded_src)}."
 
         encoder_input = torch.cat(
             [
                 self.sos,
-                torch.Tensor(encoded_src),
-                self.eos, 
-                torch.Tensor([self.pad for _ in range(src_padding_num)])
+                torch.tensor(encoded_src,dtype=torch.int64),
+                self.eos,
+                torch.tensor([self.pad] * src_padding_num, dtype=torch.int64)
             ]
         )
 
         decoder_input = torch.cat(
             [
                 self.sos,
-                torch.Tensor(encoded_trg),
-                torch.Tensor([self.pad for _ in range(trg_padding_num)])
+                torch.tensor(encoded_trg, dtype = torch.int64),
+                torch.tensor([self.pad] * trg_padding_num, dtype = torch.int64)
             ]
         )
 
         label = torch.cat(
             [
-                self.sos,
-                torch.Tensor(encoded_trg),
+                torch.tensor(encoded_trg, dtype = torch.int64),
                 self.eos,
-                torch.Tensor([self.pad for _ in range(trg_padding_num)])
+                torch.tensor([self.pad] * trg_padding_num, dtype = torch.int64)
             ]
         )
 
-        causal_mask = causal_mask_creator(label.shape[0])
+        causal_mask = causal_mask_creator(decoder_input.shape[0])
+
+        assert label.shape[0] == self.seq_len, f"Label Not Padded. seq_len:{self.seq_len}. Label_len:{label.shape[0]}."
+        assert encoder_input.shape[0] == self.seq_len, f"Encoder_input Not Padded. Label_len:{encoder_input.shape[0]}."
+        assert decoder_input.shape[0] == self.seq_len, f"Decoder_input Not Padded. Label_len:{encoder_input.shape[0]}."
 
         return {
             "encoder_input" : encoder_input,
             "decoder_input" : decoder_input,
             # (1, 1, seq_len)
-            "encoder_mask" : (encoded_src != self.pad).unsqueeze(0).unsqueeze(0).int(),
-            # (1, seq_len, seq_len)
-            "decoder_mask" : (encoded_trg != self.pad).unsqueeze(0).int() & causal_mask,
+            "encoder_mask" : (encoder_input != self.pad).int().unsqueeze(0).unsqueeze(0),
+            # (1, seq_len) X (1, seq_len, seq_len)
+            "decoder_mask" : (decoder_input != self.pad).int().unsqueeze(0) & causal_mask,
             "label":label, # (seq_len)
             "target_txt":trg_lang_pair,
             "src_txt:":src_lang_pair
         }
 
 def causal_mask_creator(seq_len):
-    return (torch.triu(torch.ones([seq_len, seq_len]), diagonal=1) == 0).unsqueeze(0).unsqueeze(0).int()
+    return (torch.triu(torch.ones([seq_len, seq_len]), diagonal=1) == 0).unsqueeze(0).int()
 

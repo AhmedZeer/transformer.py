@@ -23,9 +23,9 @@ def get_from_ds(ds, lang):
         yield item['translation'][lang]
 
 def get_or_build_tokenizer(config, ds, lang):
-    tokenizer_path = config['tokenizer_path'].format(lang)
+    tokenizer_path = Path(config['tokenizer_path'].format(lang))
     if not Path.exists(tokenizer_path):
-        tokenizer = Tokenizer(WordLevel(unk_token=['[UNK]']))
+        tokenizer = Tokenizer(WordLevel(unk_token='[UNK]'))
         tokenizer.pre_tokenizer = Whitespace()
         trainer = WordLevelTrainer(special_tokens=['[SOS]', '[EOS]', '[PAD]', '[UNK]'])
         tokenizer.train_from_iterator(get_from_ds(ds, lang), trainer=trainer)
@@ -51,8 +51,8 @@ def get_ds(config):
     max_src_seq = 0
     max_trg_seq = 0
     for item in data:
-        src_text_seq = src_tokenizer.encode(item[config['lang_src']]).ids
-        trg_text_seq = src_tokenizer.encode(item[config['lang_trg']]).ids
+        src_text_seq = src_tokenizer.encode(item['translation'][config['lang_src']]).ids
+        trg_text_seq = src_tokenizer.encode(item['translation'][config['lang_trg']]).ids
         max_src_seq = max(max_src_seq, len(src_text_seq))
         max_trg_seq = max(max_trg_seq, len(trg_text_seq))
 
@@ -65,8 +65,7 @@ def get_ds(config):
     return train_dl, valid_dl, src_tokenizer, trg_tokenizer
 
 def get_model(config, src_vocab_size, tgt_vocab_size):
-    return transformer_builder(config['seq_len'], config['seq_len'],
-                               src_vocab_size, tgt_vocab_size)
+    return transformer_builder(config['seq_len'], src_vocab_size, tgt_vocab_size)
 
 
 
@@ -76,11 +75,11 @@ def train(config):
     print(f"Device Being Used: {device}")
 
     train_dl, valid_dl, src_tokenizer, trg_tokenizer = get_ds(config)
-    model = get_model(config, src_tokenizer.vocab_size(), trg_tokenizer.vocab_size()).to(device)
+    model = get_model(config, src_tokenizer.get_vocab_size(), trg_tokenizer.get_vocab_size()).to(device)
     optimizer = torch.optim.Adam(model.parameters(), config['lr'])
 
     writer = SummaryWriter(config['experiment_name'])
-    Path(config['model_path']).mkdir(parents=True, exist_ok=True)
+    # Path(config['model_folder']).mkdir(parents=True, exist_ok=True)
 
     initial_epoch = 0
     global_step   = 0
@@ -91,6 +90,8 @@ def train(config):
         initial_epoch = state['epoch'] + 1
         global_step = state['global_step']
         optimizer.load_state_dict(state['optimizer_state_dict'])
+    else:
+        print("No Model To Reload.")
 
     loss_fn = nn.CrossEntropyLoss(ignore_index=src_tokenizer.token_to_id('[PAD]'), label_smoothing=0.1).to(device)
 
@@ -139,7 +140,3 @@ def train(config):
 if __name__ == '__main__':
     config = generate_config()
     train(config)
-
-
-
-
