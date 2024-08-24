@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import math
-
 from torch.nn.modules import transformer
 
 class EmbeddingInput(nn.Module):
@@ -25,6 +24,7 @@ class PositionalEncoder(nn.Module):
         self.dropout = nn.Dropout(drop)
         self.pe = torch.zeros([context_length, d_model])
 
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
         position = torch.arange(0, context_length, dtype = torch.float).unsqueeze(-1)
         divide = torch.exp( torch.arange(0, d_model,2) * ( - math.log(10000) / d_model) )
 
@@ -32,8 +32,11 @@ class PositionalEncoder(nn.Module):
         self.pe[:, 1::2] = torch.cos(position * divide)
         self.pe[:, 0::2] = torch.sin(position * divide)
         self.pe.unsqueeze_(0) # Adding one more dimension for batching.
+        self.pe = self.pe.to(device)
 
     def forward(self, x):
+        print(x.device)
+        print(self.pe.device)
         x = x + self.pe[:, :x.shape[1], :] # Batch X InputLen X Embeddings
         return self.dropout(x)
 
@@ -158,11 +161,9 @@ class DecoderBlock(nn.Module):
         self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(3)])
 
     def forward(self, x, encoder_output, src_mask, tgt_mask):
-
         x = self.residual_connections[0](x, lambda x: self.self_attention(x,x,x, src_mask))
         x = self.residual_connections[1](x, lambda x: self.self_attention(encoder_output,x,x, tgt_mask))
-        x = self.residual_connections[2](x, self.feed_forward(encoder_output,x,x, tgt_mask))
-
+        x = self.residual_connections[2](x, self.feed_forward)
         return x
 
 class Decoder(nn.Module):
@@ -174,7 +175,7 @@ class Decoder(nn.Module):
     def forward(self, x, encoder_output, src_mask, tgt_mask):
         for block in self.blocks:
             x = block(x, encoder_output, src_mask, tgt_mask)
-        x = self.norm(x)
+        return self.norm(x)
 
 class ProjectionLayer(nn.Module):
     def __init__(self, d_model : int, vocab_size : int):
@@ -191,6 +192,7 @@ class Transformer(nn.Module):
     def __init__(self, encoder : Encoder, decoder : Decoder, projection : ProjectionLayer,
                  src_embed : EmbeddingInput, tgt_embed : EmbeddingInput, pos_encoding : PositionalEncoder):
         super().__init__()
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.encoder = encoder
         self.decoder = decoder
         self.src_embed = src_embed
@@ -206,10 +208,12 @@ class Transformer(nn.Module):
     def decode(self, tgt, encoder_output, src_mask, tgt_mask):
         tgt = self.tgt_embed(tgt)
         tgt = self.pos_encoding(tgt)
+        assert tgt != None, "decoder output is None."
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
 
     def project(self, decoder_output):
         return self.projection(decoder_output)
+
 
 def transformer_builder(src_seq_len : int, src_vocab_size : int,
                  tgt_vocab_size : int, d_ff = 2048, d_model : int = 512, h : int = 8,
@@ -247,5 +251,5 @@ def transformer_builder(src_seq_len : int, src_vocab_size : int,
         if parameter.dim() > 1:
             nn.init.xavier_normal_(parameter)
 
-    return transformer
-
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    return transformer.to(device)
