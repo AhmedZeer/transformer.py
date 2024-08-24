@@ -1,4 +1,3 @@
-from numpy._core.defchararray import decode
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
