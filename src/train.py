@@ -34,7 +34,7 @@ def get_or_build_tokenizer(config, ds, lang):
     return tokenizer
 
 def get_ds(config):
-    data = load_dataset("Helsinki-NLP/opus-100", f"{config['lang_src']}-{config['lang_trg']}", split = 'train')
+    data = load_dataset("Helsinki-NLP/opus-100", f"{config['lang_src']}-{config['lang_trg']}", split = 'train[:10000]')
 
     train_size = int(len(data) * 0.9)
     eval_size  = len(data) - train_size

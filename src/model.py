@@ -35,8 +35,6 @@ class PositionalEncoder(nn.Module):
         self.pe = self.pe.to(device)
 
     def forward(self, x):
-        print(x.device)
-        print(self.pe.device)
         x = x + self.pe[:, :x.shape[1], :] # Batch X InputLen X Embeddings
         return self.dropout(x)
 
