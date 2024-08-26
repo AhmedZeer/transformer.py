@@ -77,5 +77,5 @@ class BiDataset( Dataset ):
         }
 
 def causal_mask_creator(seq_len):
-    return (torch.triu(torch.ones([seq_len, seq_len]), diagonal=1) == 0).unsqueeze(0).int()
+    return (torch.triu(torch.ones([1, seq_len, seq_len]), diagonal=1) == 0).int()
 

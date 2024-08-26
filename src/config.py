@@ -4,8 +4,8 @@ def generate_config():
     return {
         "lang_src":"en",
         "lang_trg":"tr",
-        "tokenizer_path":f"tokenizer_{0}.json",
-        "seq_len":2500,
+        "tokenizer_path":"tokenizer_{}.json",
+        "seq_len":250,
         "batch_size":4,
         "model_folder":"weihgts",
         "model_basename":"tmodel_",

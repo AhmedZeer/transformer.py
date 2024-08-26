@@ -84,6 +84,10 @@ class MultiHeadAttention(nn.Module):
     def attention(query, key, value, dropout : nn.Dropout, mask):
         d_k = query.shape[-1]
         qk = (query @ key.transpose(-1,-2)) / math.sqrt(d_k) # B x H x Seq x Seq
+        print("Query :", query.shape)
+        print("Key   :",   key.shape)
+        print("Attention Shape:", qk.shape)
+        print()
 
         if dropout is not None:
             qk = dropout(qk)
@@ -97,11 +101,11 @@ class MultiHeadAttention(nn.Module):
 
 
     def forward(self, k, q, v, mask):
-        key = self.w_k(k)
+        key   = self.w_k(k)
         value = self.w_v(v)
         query = self.w_q(q)
 
-        key = key.view(k.shape[0], k.shape[1], self.h, self.d_k).transpose(1,2)
+        key   = key.view(k.shape[0], k.shape[1], self.h, self.d_k).transpose(1,2)
         value = value.view(v.shape[0], v.shape[1], self.h, self.d_k).transpose(1,2)
         query = query.view(q.shape[0], q.shape[1], self.h, self.d_k).transpose(1,2)
 
@@ -132,6 +136,7 @@ class EncoderBlock(nn.Module):
         self.residual_connections = nn.ModuleList([ ResidualConnection(dropout) for _ in range(2)])
 
     def forward(self, x, src_mask):
+        print("Encoder_InpuShape:", x.shape)
         x = self.residual_connections[0](x, lambda x: self.self_attention_head(x,x,x, src_mask))
         x = self.residual_connections[1](x, self.feed_forward)
         assert x != None, "Encoder Output Is None."
@@ -159,8 +164,12 @@ class DecoderBlock(nn.Module):
         self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(3)])
 
     def forward(self, x, encoder_output, src_mask, tgt_mask):
-        x = self.residual_connections[0](x, lambda x: self.self_attention(x,x,x, src_mask))
-        x = self.residual_connections[1](x, lambda x: self.self_attention(encoder_output,x,x, tgt_mask))
+        print("Decoder_InputShape :",              x.shape)
+        print("Decoder_SourceMask :",       src_mask.shape)
+        print("Decoder_EncodShape :", encoder_output.shape)
+        print("Decoder_TargetMask :", encoder_output.shape)
+        x = self.residual_connections[0](x, lambda x: self.self_attention(x,x,x, tgt_mask))
+        x = self.residual_connections[1](x, lambda x: self.self_attention(x,encoder_output,encoder_output, src_mask))
         x = self.residual_connections[2](x, self.feed_forward)
         return x
 

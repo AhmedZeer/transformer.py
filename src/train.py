@@ -78,7 +78,7 @@ def train(config):
     optimizer = torch.optim.Adam(model.parameters(), config['lr'])
 
     writer = SummaryWriter(config['experiment_name'])
-    # Path(config['model_folder']).mkdir(parents=True, exist_ok=True)
+    Path(config['model_folder']).mkdir(parents=True, exist_ok=True)
 
     initial_epoch = 0
     global_step   = 0
@@ -138,6 +138,35 @@ def train(config):
                 "epoch":e
             }, model_filename
         )
+
+        with torch.no_grad():
+            model.eval()
+            eval = []
+            validation_iterator = tqdm(valid_dl)
+            for batch in validation_iterator:
+                encoder_input = batch['encoder_input'].to(device) # B x seq_len
+                decoder_input = batch['decoder_input'].to(device) # B x seq_len
+                encoder_mask  = batch['encoder_mask'].to(device)  # B x 1 x seq_len
+                decoder_mask  = batch['decoder_mask'].to(device)  # B x seq_len x seq_len
+                label = batch['label'].to(device)                 # B x seq_len
+
+                encoder_output = model.encode(encoder_input, encoder_mask)
+                decoder_output = model.decode(decoder_input, encoder_output,
+                                              encoder_mask, decoder_mask)
+                preds = model.project(decoder_output) # B x seq_len x vocab_size
+                preds = preds.view(-1, src_tokenizer.get_vocab_size())
+                labels = label.view(-1)
+
+                for idx,pred in enumerate(preds):
+                    sample = {}
+                    sample['pred']  = pred
+                    sample['tgt']   = labels[idx]
+                    sample['Query'] = src_tokenizer.decode(encoder_input[idx])
+                    eval.append(sample)
+
+
+
+
 
 if __name__ == '__main__':
     config = generate_config()
