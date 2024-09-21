@@ -44,7 +44,6 @@ def greedy_decoder(model : Transformer,
     sos = tgt_tokenizer.token_to_id('[SOS]')
     eos = tgt_tokenizer.token_to_id('[EOS]')
     decoder_input = torch.empty([1,1], dtype = torch.int64).fill_(sos).to(device)
-    # decoder_input, tgt_mask = padding(decoder_input, tgt_tokenizer, config, 'decoder')
 
     #def forward(self, x, encoder_output, src_mask, tgt_mask):
     while True:
@@ -52,8 +51,9 @@ def greedy_decoder(model : Transformer,
         if len(decoder_input) >= config['seq_len']:
             break
 
-        tgt_mask = causal_mask_creator(decoder_input.size(1))
-        decoder_output = model.decode(decoder_input, encoder_output, src_mask, tgt_mask)
+        padded_decoder_input, tgt_mask = padding(decoder_input, tgt_tokenizer, config, 'decoder')
+        tgt_mask = causal_mask_creator(padded_decoder_input.size(1)) & tgt_mask
+        decoder_output = model.decode(padded_decoder_input, encoder_output, src_mask, tgt_mask)
         # print("Dynamic Seq Len  :", decoder_input.shape)
         # print("Dynamic Tgt Mask :", tgt_mask.shape)
 
@@ -74,6 +74,7 @@ def greedy_decoder(model : Transformer,
             torch.empty(1,1).fill_(next_word).type_as(decoder_input).to(device)],
             dim = 1
         )
+    return decoder_input
 
 
 def padding(tokenized_query, src_tokenizer, config, mode='encoder'):
@@ -86,15 +87,15 @@ def padding(tokenized_query, src_tokenizer, config, mode='encoder'):
         paddings = config['seq_len'] - len(tokenized_query)
         padded_sequence = torch.cat(
             [
-                torch.tensor(tokenized_query, dtype = torch.int64),
-                torch.tensor([[pad]] * paddings, dtype = torch.int64)
+                torch.tensor(tokenized_query, dtype = torch.int64).squeeze(0),
+                torch.tensor([pad] * paddings, dtype = torch.int64)
             ]
-        )
+        ).unsqueeze(0)
         mask = (padded_sequence != pad).int().unsqueeze(0)
 
         # print("Encoder Padded Len:", len(padded_sequence))
-        assert len(padded_sequence) == config['seq_len'], "Not Padded Well."
-        return padded_sequence.transpose(1,0), mask
+        assert padded_sequence.shape[1] == config['seq_len'], f"Not Padded Well. ({padded_sequence.shape}) & ({config['seq_len']})"
+        return padded_sequence, mask
 
     else:
         paddings = config['seq_len'] - len(tokenized_query) - 2
@@ -124,12 +125,14 @@ def inference(model : Transformer, query : str,
     tokenized_query, src_mask = padding(tokenized_query, src_tokenizer, config)
     encoder_output = model.encode(tokenized_query, src_mask)
 
-    greedy_decoder(model, encoder_output,
+    translation = greedy_decoder(model, encoder_output,
                    src_mask,
                    tgt_tokenizer, device, config)
+    return translation
 
 if __name__ == '__main__':
     src_tokenizer, tgt_tokenizer = train_tokenizer()
     model = get_model(config, src_tokenizer.get_vocab_size(), tgt_tokenizer.get_vocab_size())
     # 7
-    inference(model, "HELLO THIS IS REALLY LONG SENTENCE AND SHOULD BE AAAAAAA", src_tokenizer, tgt_tokenizer, config)
+    translation = inference(model, "HELLO THIS IS REALLY LONG SENTENCE AND SHOULD BE AAAAAAA", src_tokenizer, tgt_tokenizer, config)
+    print(translation)

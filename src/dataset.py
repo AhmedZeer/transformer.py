@@ -1,81 +1,88 @@
 import torch
-from torch.utils.data import Dataset
+from datasets import load_dataset
+from torch.utils.data import Dataset, DataLoader
+from tokenizer import *
 
-class BiDataset( Dataset ):
-    def __init__(self, src_tokenizer, trg_tokenizer,
-                 ds, seq_len, trg_lang, src_lang):
-        super().__init__()
-        self.ds = ds
-        self.seq_len = seq_len
-        self.trg_lang = trg_lang 
-        self.src_lang = src_lang
+class train_data(Dataset):
+    def __init__(self, data, tgt_tokenizer, src_tokenizer, seq_len):
+        self.data = data
         self.src_tokenizer = src_tokenizer
-        self.trg_tokenizer = trg_tokenizer
+        self.tgt_tokenizer = tgt_tokenizer
+        self.seq_len = seq_len
 
-        self.sos = torch.tensor([src_tokenizer.token_to_id('[SOS]')], dtype=torch.int64)
-        self.eos = torch.tensor([src_tokenizer.token_to_id('[EOS]')], dtype=torch.int64)
-        self.pad = torch.tensor([src_tokenizer.token_to_id('[PAD]')], dtype=torch.int64)
+    def __getitem__(self, idx):
 
-    def __len__(self):
-        return len(self.ds)
+        src = torch.tensor(self.src_tokenizer.encode(self.data[idx]['en']).ids)
+        tgt = torch.tensor(self.tgt_tokenizer.encode(self.data[idx]['tr']).ids)
 
-    def __getitem__(self, index):
-        pair_row = self.ds[index]
-        trg_lang_pair = pair_row['translation'][self.trg_lang]
-        src_lang_pair = pair_row['translation'][self.src_lang]
+        sos_id = torch.tensor(self.src_tokenizer.token_to_id("[SOS]"), dtype = torch.int64).unsqueeze(0)
+        eos_id = torch.tensor(self.src_tokenizer.token_to_id("[EOS]"), dtype = torch.int64).unsqueeze(0)
+        pad_id = torch.tensor(self.src_tokenizer.token_to_id("[PAD]"), dtype = torch.int64)
 
-        encoded_src = self.src_tokenizer.encode(src_lang_pair).ids
-        encoded_trg = self.trg_tokenizer.encode(trg_lang_pair).ids
+        # [SOS] - src - [EOS] - [PAD]
+        src_pads_num = self.seq_len - len(src) - 2
 
-        src_padding_num = self.seq_len - ( len(encoded_src) + 2 )
-        trg_padding_num = self.seq_len - ( len(encoded_trg) + 1 )
+        # src - [EOS] - [PAD]
+        tgt_pads_num = self.seq_len - len(tgt) - 1
 
-        assert src_padding_num > 0, f"Too Short SeqLen, seq_len: {self.seq_len}, src_len:{len(encoded_src)}."
-        assert trg_padding_num > 0, f"Too Short SeqLen, seq_len: {self.seq_len}, src_len:{len(encoded_src)}."
+        assert tgt_pads_num > 0, f"Short Seq Len. SeqLen: {self.seq_len} | {len(tgt) - 1} -> {tgt_pads_num}"
+        assert src_pads_num > 0, f"Short Seq Len. SeqLen: {self.seq_len} | {len(src) - 2} -> {src_pads_num}"
 
-        encoder_input = torch.cat(
+        # [SOS] and [EOS]
+        src = torch.cat(
             [
-                self.sos,
-                torch.tensor(encoded_src,dtype=torch.int64),
-                self.eos,
-                torch.tensor([self.pad] * src_padding_num, dtype=torch.int64)
+                sos_id,
+                src,
+                eos_id,
+                torch.tensor([pad_id] * src_pads_num)
             ]
         )
 
-        decoder_input = torch.cat(
-            [
-                self.sos,
-                torch.tensor(encoded_trg, dtype = torch.int64),
-                torch.tensor([self.pad] * trg_padding_num, dtype = torch.int64)
-            ]
-        )
-
+        # Only [EOS]
         label = torch.cat(
             [
-                torch.tensor(encoded_trg, dtype = torch.int64),
-                self.eos,
-                torch.tensor([self.pad] * trg_padding_num, dtype = torch.int64)
+                tgt,
+                eos_id,
+                torch.tensor([pad_id] * tgt_pads_num)
             ]
         )
 
-        causal_mask = causal_mask_creator(decoder_input.shape[0])
+        # Only [SOS]
+        tgt = torch.cat(
+            [
+                sos_id,
+                tgt,
+                torch.tensor([pad_id] * tgt_pads_num)
+            ]
+        )
 
-        assert label.shape[0] == self.seq_len, f"Label Not Padded. seq_len:{self.seq_len}. Label_len:{label.shape[0]}."
-        assert encoder_input.shape[0] == self.seq_len, f"Encoder_input Not Padded. Label_len:{encoder_input.shape[0]}."
-        assert decoder_input.shape[0] == self.seq_len, f"Decoder_input Not Padded. Label_len:{encoder_input.shape[0]}."
 
-        return {
-            "encoder_input" : encoder_input,
-            "decoder_input" : decoder_input,
-            # (1, 1, seq_len)
-            "encoder_mask" : (encoder_input != self.pad).int().unsqueeze(0).unsqueeze(0),
-            # (1, seq_len) X (1, seq_len, seq_len)
-            "decoder_mask" : (decoder_input != self.pad).int().unsqueeze(0) & causal_mask,
-            "label":label, # (seq_len)
-            "target_txt":trg_lang_pair,
-            "src_txt:":src_lang_pair
-        }
+        src_msk = src == pad_id
+        tgt_msk = tgt == pad_id
 
-def causal_mask_creator(seq_len):
-    return (torch.triu(torch.ones([1, seq_len, seq_len]), diagonal=1) == 0).int()
+        return dict(
+            source_seq = src,
+            target_seq = tgt,
+            label = label,
+            padding_source_mask = src_msk,
+            padding_target_mask = tgt_msk,
+        )
 
+    def __len__(self):
+        return len(self.data)
+
+
+def create_train_dataloader(tgt_toknizer, src_toknizer, seq_len, batch_size):
+
+    dataset = load_dataset("Helsinki-NLP/opus-100", "en-tr", split="train[:2000]")
+
+    raw_data = []
+    for item in dataset['translation']:
+        tgt = item['tr']
+        src = item['en']
+        if len(tgt) < seq_len and len(src) < seq_len:
+            raw_data.append(item)
+
+    train_dataset = train_data(raw_data, tgt_toknizer, src_toknizer, seq_len)
+    train_dl = DataLoader(train_dataset, batch_size=batch_size, shuffle = True)
+    return train_dl

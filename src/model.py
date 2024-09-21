@@ -1,262 +1,275 @@
+# @title model.py
 import torch
 import torch.nn as nn
 import math
-from torch.nn.modules import transformer
 
-class EmbeddingInput(nn.Module):
 
-    def __init__(self, d_model : int, vocab_size : int):
+class InputEmbedding(nn.Module):
+    def __init__(self, vocab_sz:int, d_model:int):
         super().__init__()
-        self.embeddings = nn.Embedding(vocab_size, d_model) # (vocab_size x d_model)
-        self.vocab_size = vocab_size
-        self.d_model = d_model
-    
+        self.embedding = nn.Embedding(vocab_sz, d_model)
     def forward(self, x):
-        return self.embeddings(x) * math.sqrt(self.d_model)
+        return self.embedding(x)
 
 
-class PositionalEncoder(nn.Module):
-
-    def __init__(self, d_model : int, context_length : int, drop : float):
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model:int, seq_len:int, dropout:float):
         super().__init__()
-        self.d_model = d_model
-        self.context_length = context_length
-        self.dropout = nn.Dropout(drop)
-        self.pe = torch.zeros([context_length, d_model])
 
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        position = torch.arange(0, context_length, dtype = torch.float).unsqueeze(-1)
-        divide = torch.exp( torch.arange(0, d_model,2) * ( - math.log(10000) / d_model) )
-
-        # Applying The Encoder For Each Word But For Different Dims
-        self.pe[:, 1::2] = torch.cos(position * divide)
-        self.pe[:, 0::2] = torch.sin(position * divide)
-        self.pe.unsqueeze_(0) # Adding one more dimension for batching.
-        self.pe = self.pe.to(device)
-
-    def forward(self, x):
-        x = x + self.pe[:, :x.shape[1], :] # Batch X InputLen X Embeddings
-        return self.dropout(x)
-
-class LayerNormalization(nn.Module):
-
-    def __init__(self, eps : float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.alpha = nn.Parameter(torch.ones(1))  # Multiplied
-        self.bias = nn.Parameter(torch.zeros(1))  # Added
-
-    def forward(self, x):
-        mean = x.mean(dim = -1, keepdim = True)
-        std  = x.std(dim = -1, keepdim = True)
-        return self.alpha * (x - mean) / ( std + self.eps ) + self.bias
-
-class FeedForwardNN(nn.Module):
-
-    def __init__(self, d_model : int, d_ff : int, dropout : float = 0.5):
-        super().__init__()
-        self.d_model = d_model
-        self.d_ff = d_ff
-        self.linear1 = nn.Linear(d_model, d_ff)
-        self.linear2 = nn.Linear(d_ff, d_model)
+        self.pe = torch.empty(seq_len, d_model).to(device)
         self.dropout = nn.Dropout(dropout)
-        self.relu = nn.ReLU()
+
+        # ( seq_len, 1 )
+        pos = torch.arange(0,seq_len).unsqueeze(1)
+
+        # ( d_model/2 )
+        i   = torch.arange(0,d_model,2)
+
+        # ( d_model/2 )
+        denom = torch.pow(10000, i / d_model)
+
+        self.pe[:, 0::2] = torch.sin(pos * denom)
+        self.pe[:, 1::2] = torch.cos(pos * denom)
+
+        # pe -> (1, seq_len, d_model)
+        self.pe.unsqueeze_(0)
 
     def forward(self, x):
-        return self.linear2(self.dropout(self.relu(self.linear1(x))))
-
+        # x -> (batch, seq_len, d_model)
+        return x + self.pe[:, x.shape[1]-1, :]
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, h:int, d_model:int, dropout:float):
+    def __init__(self, head:int, d_model:int, dropout:float):
         super().__init__()
-        assert d_model % h == 0, f"Can't create d_k, d_model:{d_model}, h:{h}"
-        self.h = h
-        self.d_model = d_model
-        self.d_k = d_model // h
 
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
-        self.w_o = nn.Linear(d_model, d_model)
+        assert d_model % head == 0, f"Can't create heads. d_model:{d_model}, head:{head}"
+        self.d_k  = d_model // head
+        self.head = head
+        self.w_q  = nn.Linear(d_model, d_model)
+        self.w_k  = nn.Linear(d_model, d_model)
+        self.w_v  = nn.Linear(d_model, d_model)
+        self.w_o  = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
 
-    @staticmethod
-    def attention(query, key, value, dropout : nn.Dropout, mask):
-        d_k = query.shape[-1]
-        qk = (query @ key.transpose(-1,-2)) / math.sqrt(d_k) # B x H x Seq x Seq
-        print("Query :", query.shape)
-        print("Key   :",   key.shape)
-        print("Attention Shape:", qk.shape)
-        print()
+    def forward(self, query, key, value, padding_mask):
+        # query -> ( batch, seq_len, d_model )
+        # -> (batch, seq_len, h, d_k) -> (batch, h, seq_len, d_k)
+        batch_sz, seq_len = query.shape[0], query.shape[1]
+        # print("Query Shape:", query.shape)
+        q = self.w_q(query).view(batch_sz, seq_len, self.head, self.d_k).transpose(1,2)
+        k = self.w_k(key).view(batch_sz, seq_len, self.head, self.d_k).transpose(1,2)
+        v = self.w_v(value).view(batch_sz, seq_len, self.head, self.d_k).transpose(1,2)
 
-        if dropout is not None:
-            qk = dropout(qk)
+        # print("\n * self.head:", self.head)
+        # print("\n * self.d_k:", self.d_k)
+        # print("\n * q.shape:", q.shape)
+        # print("\n * k.shape:", k.shape)
 
-        if mask is not None:
-            qk.masked_fill_(mask == 0, -1e9)
+        # (batch, h, seq_len, d_model) X (batch, h, d_model, seq_len)
+        # -> (batch, h, seq_len, seq_len)
+        attention = q @ k.transpose(-1,-2) / math.sqrt(self.d_k)
+        # print("\n * qk.shape:", attention.shape)
 
-        qkv = qk @ value # B x H x Seq x Embed
-        return qk, qkv.softmax(dim=-1)
+        if padding_mask is not None:
+            causal_mask = torch.triu(attention, diagonal = 1).bool()
+            attention.masked_fill_(causal_mask , 1e-10)
+            attention.masked_fill_(padding_mask , 1e-10)
 
+        attention = attention.softmax(dim=-1)
 
+        # (batch, h, seq_len, seq_len) X (batch, h, seq_len, d_k)
+        # -> (batch, h, seq_len, d_k)
+        attention = attention @ v
+        # print(" * qkv.shape:", attention.shape)
 
-    def forward(self, k, q, v, mask):
-        key   = self.w_k(k)
-        value = self.w_v(v)
-        query = self.w_q(q)
-
-        key   = key.view(k.shape[0], k.shape[1], self.h, self.d_k).transpose(1,2)
-        value = value.view(v.shape[0], v.shape[1], self.h, self.d_k).transpose(1,2)
-        query = query.view(q.shape[0], q.shape[1], self.h, self.d_k).transpose(1,2)
-
-        self.attention_scores, x = MultiHeadAttention.attention(query=query, key=key, value=value, dropout=self.dropout, mask=mask)
-
-        # B x H x Seq x Embed --> B x Seq X Embed
-        x = x.transpose(1,2).contiguous().view(x.shape[0], -1, self.d_k * self.h )
-
-        assert x != None, "Attention Is None."
-        return self.w_o(x)
+        # (batch, seq_len, d_model)
+        return self.w_o(attention.transpose(1,2).contiguous().view(batch_sz, -1, self.d_k * self.head))
 
 class ResidualConnection(nn.Module):
-    def __init__(self, dropout : float):
+    def __init__(self, d_model:int):
         super().__init__()
-        self.norm = LayerNormalization()
+        self.normalize = nn.LayerNorm(d_model)
+
+    def forward(self, x, sublayer_x):
+        x += sublayer_x
+        return self.normalize(x)
+
+class FFN(nn.Module):
+    def __init__(self, d_model:int, ff:int, dropout:float):
+        super().__init__()
+        self.linear1 = nn.Linear(d_model, ff)
+        self.linear2 = nn.Linear(ff, d_model)
+        self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, sublayer):
-        assert x != None, "Residual Input Is None."
-        return x + self.dropout(sublayer(self.norm(x)))
+    def forward(self, x):
+        return self.dropout(self.linear2(self.relu(self.linear1(x))))
 
 class EncoderBlock(nn.Module):
-
-    def __init__(self, self_attention_head : MultiHeadAttention, feed_forward : FeedForwardNN, dropout:float):
+    def __init__(self, multi_head_attn:MultiHeadAttention,
+                 residual_1:ResidualConnection,
+                 ffn:FFN):
         super().__init__()
-        self.self_attention_head = self_attention_head
-        self.feed_forward = feed_forward
-        self.residual_connections = nn.ModuleList([ ResidualConnection(dropout) for _ in range(2)])
+        self.multi_head_attn = multi_head_attn
+        self.residual_1 = residual_1
+        self.ffn = ffn
 
-    def forward(self, x, src_mask):
-        print("Encoder_InpuShape:", x.shape)
-        x = self.residual_connections[0](x, lambda x: self.self_attention_head(x,x,x, src_mask))
-        x = self.residual_connections[1](x, self.feed_forward)
-        assert x != None, "Encoder Output Is None."
+    def forward(self, x, padding_source_mask=None):
+
+        before_resid = x
+        x = self.multi_head_attn(x,x,x, padding_source_mask)
+        # print("Multi-head Attn Shape:", x.shape)
+
+        x = self.residual_1(x, before_resid)
+        # print("Normalized:", x.shape)
+
+        x = self.ffn(x)
+        # print("ffn:", x.shape)
         return x
+
+
+def build_encoder_block(encoder_config):
+
+    d_model = encoder_config['d_model']
+    head = encoder_config['head_num']
+    dropout = encoder_config['dropout_value']
+    ff = encoder_config['ffn']
+
+    multi_head_attn = MultiHeadAttention(head, d_model, dropout)
+    residul_1 = ResidualConnection(d_model)
+    ffn = FFN(d_model, ff, dropout)
+    return EncoderBlock(multi_head_attn, residul_1, ffn)
 
 class Encoder(nn.Module):
-    def __init__(self, blocks : nn.ModuleList):
+    def __init__(self, blocks:nn.ModuleList):
         super().__init__()
         self.blocks = blocks
-        self.norm = LayerNormalization()
-
-    def forward(self, x, src_mask):
+    def forward(self, x, padding_source_mask):
         for block in self.blocks:
-            x = block(x, src_mask)
-        return self.norm(x)
-
-class DecoderBlock(nn.Module):
-    def __init__(self, feed_forward: FeedForwardNN, self_attention : MultiHeadAttention, cross_attention : MultiHeadAttention , dropout : float):
-        super().__init__()
-        self.feed_forward = feed_forward
-        self.self_attention = self_attention
-        self.cross_attention = cross_attention
-        self.dropout = dropout
-        self.norm = LayerNormalization()
-        self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(3)])
-
-    def forward(self, x, encoder_output, src_mask, tgt_mask):
-        print("Decoder_InputShape :",              x.shape)
-        print("Decoder_SourceMask :",       src_mask.shape)
-        print("Decoder_EncodShape :", encoder_output.shape)
-        print("Decoder_TargetMask :", encoder_output.shape)
-        x = self.residual_connections[0](x, lambda x: self.self_attention(x,x,x, tgt_mask))
-        x = self.residual_connections[1](x, lambda x: self.self_attention(x,encoder_output,encoder_output, src_mask))
-        x = self.residual_connections[2](x, self.feed_forward)
+            x = block(x, padding_source_mask)
         return x
 
+
+def build_encoder(encoder_config):
+    blocks_num = encoder_config['blocks_num']
+    blocks = nn.ModuleList([build_encoder_block(encoder_config) for _ in range(blocks_num)])
+    return Encoder(blocks)
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self, multi_head_attn:MultiHeadAttention,
+                 cross_attn:MultiHeadAttention,
+                 residual_1:ResidualConnection,
+                 residual_2:ResidualConnection,
+                 residual_3:ResidualConnection,
+                 ffn:FFN):
+        super().__init__()
+        self.multi_head_attn = multi_head_attn
+        self.cross_attn = cross_attn
+        self.residual_1 = residual_1
+        self.residual_2 = residual_2
+        self.residual_3 = residual_3
+        self.ffn = ffn
+
+    def forward(self, encoder_output, x, padding_target_mask=None):
+
+        before_resid = x
+        x = self.multi_head_attn(x,x,x, padding_target_mask)
+        x = self.residual_1(x, before_resid)
+
+        before_resid = x
+        x = self.cross_attn(x, encoder_output, encoder_output, padding_target_mask)
+        x = self.residual_2(x, before_resid)
+
+        before_resid = x
+        x = self.ffn(x)
+        x = self.residual_3(x, before_resid)
+
+        return x
+
+
 class Decoder(nn.Module):
-    def __init__(self, blocks : nn.ModuleList):
+    def __init__(self, blocks:nn.ModuleList):
         super().__init__()
         self.blocks = blocks
-        self.norm = LayerNormalization()
-
-    def forward(self, x, encoder_output, src_mask, tgt_mask):
+    def forward(self, encoder_output, x, padding_target_mask=None):
         for block in self.blocks:
-            x = block(x, encoder_output, src_mask, tgt_mask)
-        return self.norm(x)
+            x = block(encoder_output, x, padding_target_mask)
+        return x
+
+
+def build_decoder_block(model_config):
+
+    d_model = model_config['d_model']
+    head = model_config['head_num']
+    dropout = model_config['dropout_value']
+    ff = model_config['ffn']
+
+    multi_head_attn = MultiHeadAttention(head, d_model, dropout)
+    cross_attention = MultiHeadAttention(head, d_model, dropout)
+    residul_1 = ResidualConnection(d_model)
+    residul_2 = ResidualConnection(d_model)
+    residul_3 = ResidualConnection(d_model)
+    ffn = FFN(d_model, ff, dropout)
+    return DecoderBlock(multi_head_attn, cross_attention, residul_1,
+                        residul_2, residul_3, ffn)
+
+def build_decoder(model_config):
+    blocks_num = model_config['blocks_num']
+    blocks = nn.ModuleList([build_decoder_block(model_config) for _ in range(blocks_num)])
+    return Decoder(blocks)
 
 class ProjectionLayer(nn.Module):
-    def __init__(self, d_model : int, vocab_size : int):
+    def __init__(self, d_model : int, vocab_sz : int):
         super().__init__()
-        self.d_model = d_model
-        self.vocab_size = vocab_size
-        self.linear = nn.Linear(d_model, vocab_size)
+        self.d_model  = d_model
+        self.vocab_sz = vocab_sz
+        self.linear   = nn.Linear(d_model, vocab_sz)
 
-    # x : B x Seq x d_model --> B x Seq x Vocab_Size
+    # (B, seq_len, d_model) -> (B, seq_len, vocab_sz)
     def forward(self, x):
-        return torch.log_softmax(self.linear(x), dim = -1)
+        x = self.linear(x)
+        # print("X_Shape:", x.shape)
+        return x
 
 class Transformer(nn.Module):
-    def __init__(self, encoder : Encoder, decoder : Decoder, projection : ProjectionLayer,
-                 src_embed : EmbeddingInput, tgt_embed : EmbeddingInput, pos_encoding : PositionalEncoder):
+    def __init__(self, input_embeddings:InputEmbedding,
+                 positional_encoding:PositionalEncoding,
+                 encoder_blocks:Encoder,
+                 decoder_blocks:Decoder,
+                 projection_layer:ProjectionLayer):
         super().__init__()
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.encoder = encoder
-        self.decoder = decoder
-        self.src_embed = src_embed
-        self.tgt_embed = tgt_embed
-        self.projection = projection
-        self.pos_encoding = pos_encoding
+        self.input_embeddings = input_embeddings
+        self.positional_encoding = positional_encoding
+        self.encoder_blocks = encoder_blocks
+        self.decoder_blocks = decoder_blocks
+        self.projection_layer = projection_layer
 
-    def encode(self, src, src_mask):
-        src = self.src_embed(src)
-        src = self.pos_encoding(src)
-        return self.encoder(src, src_mask)
+    def forward(self, encoder_input, decoder_input, padding_source_mask, padding_target_mask):
 
-    def decode(self, tgt, encoder_output, src_mask, tgt_mask):
-        tgt = self.tgt_embed(tgt)
-        tgt = self.pos_encoding(tgt)
-        assert tgt != None, "decoder output is None."
-        return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
+        encoder_input  = self.input_embeddings(encoder_input)
+        encoder_input  = self.positional_encoding(encoder_input)
 
-    def project(self, decoder_output):
-        return self.projection(decoder_output)
+        decoder_input  = self.input_embeddings(decoder_input)
+        decoder_input  = self.positional_encoding(decoder_input)
 
+        encoder_output = self.encoder_blocks(encoder_input, padding_source_mask)
+        decoder_output = self.decoder_blocks(encoder_output, decoder_input, padding_target_mask)
 
-def transformer_builder(src_seq_len : int, src_vocab_size : int,
-                 tgt_vocab_size : int, d_ff = 2048, d_model : int = 512, h : int = 8,
-                 N : int = 6, dropout : float = 0.1):
+        return self.projection_layer(decoder_output)
 
-    src_embedding = EmbeddingInput(d_model, src_vocab_size)
-    tgt_embedding = EmbeddingInput(d_model, tgt_vocab_size)
-    positional_encoder = PositionalEncoder(d_model, src_seq_len, dropout)
+def build_transformer(model_config):
+    vocab_sz = model_config['vocab_size']
+    d_model = model_config['d_model']
+    seq_len = model_config['seq_len']
+    dropout = model_config['dropout_value']
 
-    encoder_blocks = []
-    decoder_blocks = []
-
-    for _ in range(N):
-        multi_head_attention = MultiHeadAttention(h, d_model, dropout)
-        feed_forward = FeedForwardNN(d_model, d_ff, dropout)
-        encoder_block = EncoderBlock(multi_head_attention, feed_forward, dropout)
-        encoder_blocks.append(encoder_block)
-
-    for _ in range(N):
-        self_attention  = MultiHeadAttention(h, d_model, dropout)
-        cross_attention = MultiHeadAttention(h, d_model, dropout)
-        feed_forward  = FeedForwardNN(d_model, d_ff, dropout)
-        decoder_block = DecoderBlock(feed_forward, self_attention, cross_attention, dropout)
-        decoder_blocks.append(decoder_block)
-
-    encoder = Encoder(nn.ModuleList(encoder_blocks))
-    decoder = Decoder(nn.ModuleList(decoder_blocks))
-    project = ProjectionLayer(d_model,tgt_vocab_size)
-
-    transformer = Transformer(encoder = encoder, decoder = decoder, projection = project,
-                src_embed = src_embedding, tgt_embed = tgt_embedding,
-                pos_encoding = positional_encoder)
-
-    for parameter in transformer.parameters():
-        if parameter.dim() > 1:
-            nn.init.xavier_normal_(parameter)
-
+    input_embeddings = InputEmbedding(vocab_sz, d_model)
+    positional_encoding = PositionalEncoding(d_model, seq_len, dropout)
+    projection_layer = ProjectionLayer(model_config['d_model'], model_config['vocab_size'])
+    encoder = build_encoder(model_config)
+    decoder = build_decoder(model_config)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    return transformer.to(device)
+    print("Model Created And Moved To ", device)
+    return Transformer(input_embeddings, positional_encoding, encoder, decoder, projection_layer).to(device)
